@@ -7,9 +7,9 @@ export const createEvent = async (req, res) => {
             console.log(error);
             return res.status(400).json({ message: 'Invalid event data', error: error.details });
         }
-        
+
         let { startTime, endTime } = req.body;
-        
+
         if (startTime) {
             startTime = new Date(startTime);
         }
@@ -41,13 +41,13 @@ export const createEvent = async (req, res) => {
             });
         }
 
-        const eventData = { 
-            ...req.body, 
+        const eventData = {
+            ...req.body,
             user: req.userId,
             startTime,
             endTime
         };
-        
+
         const event = new Event(eventData);
         await event.save();
         res.status(201).json({ status: true, message: 'Event created successfully', event });
@@ -86,18 +86,22 @@ export const getEvents = async (req, res) => {
 
 export const updateEvent = async (req, res) => {
     try {
-        const { eventId } = req.params;
-        const { title, description, date, attendees } = req.body;
-        if (!title || !date) {
-            return res.status(400).json({ message: 'Title and date are required' });
+        const { id } = req.params;
+        const { title, description, startTime, endTime, attendees, location } = req.body;
+        const { error } = validateEvent({ ...req.body, user: req.userId });
+        if (error) {
+            console.log(error);
+            return res.status(400).json({ message: 'Invalid event data', error: error.details });
         }
-        const event = await Event.findById(eventId);
+        const event = await Event.findById(id);
         if (!event) {
             return res.status(404).json({ message: 'Event not found' });
         }
         event.title = title;
         event.description = description;
-        event.date = new Date(date);
+        event.startTime = new Date(startTime);
+        event.endTime = new Date(endTime);
+        event.location = location;
         if (attendees) {
             event.attendees = attendees;
         }
@@ -111,8 +115,9 @@ export const updateEvent = async (req, res) => {
 
 export const deleteEvent = async (req, res) => {
     try {
-        const { eventId } = req.params;
-        const event = await Event.findByIdAndDelete(eventId);
+        const { id } = req.params;
+        console.log(`Deleting event with ID: ${id}`);
+        const event = await Event.findByIdAndDelete(id);
         if (!event) {
             return res.status(404).json({ message: 'Event not found' });
         }
@@ -132,5 +137,22 @@ export const eventBulkCreate = async (req, res) => {
     } catch (error) {
         console.log(error);
         res.status(500).json({ message: 'Error creating events', error });
+    }
+}
+
+export const getEventById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        console.log(id, 'Fetching event by ID');
+        const event = await Event.findById(id).populate('user', 'name email').populate('attendees', 'name email')
+            .select('title description startTime endTime location attendees status -_id');
+        console.log(event, 'Fetched event');
+        if (!event) {
+            return res.status(404).json({ message: 'Event not found' });
+        }
+        res.status(200).json(event);
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({ message: 'Error fetching event', error });
     }
 }
