@@ -59,8 +59,9 @@ export const validateEvent = (event) => {
             latitude: joi.number().required()
         }).optional(),
         attendees: joi.array().items(joi.string()).optional(),
-        startTime: joi.string().optional(),
-        endTime: joi.string().optional()
+        startTime: joi.date().optional(),
+        endTime: joi.date().optional(),
+        status: joi.string().valid('open', 'cancelled').optional()
     });
     return schema.validate(event);
 }
