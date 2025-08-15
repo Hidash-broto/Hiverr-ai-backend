@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import userRouter from './routers/user.mjs'
 import tasksRouter from './routers/tasks.mjs';
 import eventRouter from './routers/event.mjs';
+import chatRouter from './routers/chatbot.mjs'
 
 const app = express();
 const port = process.env.PORT;
@@ -18,5 +19,6 @@ app.use(morgan('tiny'));
 app.use('/api/user', userRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/events', eventRouter);
+app.use('/api/chat', chatRouter);
 
 app.listen(port, () => console.log(`Port is running on ${port}`));
