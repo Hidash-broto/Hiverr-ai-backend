@@ -7,10 +7,16 @@ import {
     MemorySaver,
 } from '@langchain/langgraph'
 import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { initialChatPrompt } from "./constants.mjs";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import { createToolCallingAgent, AgentExecutor } from "langchain/agents";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import z from "zod";
+import { inngest } from "../inngest/client.mjs";
 
 const llm = new ChatGroq({
     model: 'gemma2-9b-it',
-    temperature: 0,
+    temperature: 0.5,
 })
 
 const promptTemplate = ChatPromptTemplate.fromMessages([
@@ -40,35 +46,121 @@ const memory = new MemorySaver();
 export const app = workflow.compile({ checkpointer: memory })
 
 export const initializeChat = async (data, chatId) => {
-    const prompt = `You are a warm, WhatsApp-style assistant for a task or event and scheduler.
-    Task context (JSON): ${JSON.stringify(data)}
+    const message = [{ role: 'user', content: initialChatPrompt(data) }];
+    const output = await llm.invoke(message, { configurable: { thread_id: chatId } });
+    return output.content;
+}
 
-    Goal: send ONE short opening line that feels personal and starts a useful chat about this specific task/event.
+export const llmChat = async (input) => {
+    const llm = new ChatGoogleGenerativeAI({
+        model: "gemini-2.0-flash",
+        temperature: 0
+    });
+    return await llm.invoke([{ role: 'user', content: input }]);
+}
 
-    Do:
-    - Refer to the task/event by name (or a natural paraphrase).
-    - Gently acknowledge the likely vibe (busy, excited, stressed) using clues like due date, priority, status, notes.
-    - Ask exactly ONE friendly, concrete question that helps progress: e.g., why it's important, any blockers, when to schedule it, reminder preference, need to break it into steps, or reschedule.
-    - If due soon or overdue, surface that kindly and offer help; if completed, celebrate and ask for quick wrap‑up.
-    - Keep it casual: 1–2 short sentences max, contractions ok, 0–1 emoji, tiny natural imperfection allowed.
-    - If a name exists (assignee/owner/user), greet them briefly by first name.
+export const agent = async (input, userId) => {
 
-    Don't:
-    - Be long, list things, or ask multiple questions.
-    - Say "As an AI" or mention metadata/JSON.
+    const addTaskTool = new DynamicStructuredTool({
+        name: "addTask",
+        description: "Add a new task to the list.",
+        schema: z.object({
+            title: z.string().describe("Task title"),
+            dueDate: z.string().optional().describe("Optional due date"),
+            description: z.string().optional().describe("Optional task description"),
+            priority: z.string().optional().describe("Task priority (high, medium, low)"),
+        }),
+        func: async ({ title, dueDate, description, priority }) => {
+            try {
+                if (!title || !description) {
+                    return "Title and description are required.";
+                }
+                // Send event with proper error handling
+                await inngest.send({
+                    name: 'create-task',
+                    data: {
+                        userId,
+                        title,
+                        description,
+                        dueDate: dueDate ? new Date(dueDate) : null,
+                        priority: priority || 'medium'
+                    }
+                });
+                return `Task "${title}" has been added successfully.`;
+            } catch (err) {
+                console.error("Error sending task creation event:", err);
+                return `Failed to create task "${title}". Error: ${err.message}`;
+            }
+        },
+    });
 
-    Output only the message text.`
-    const callModel = async (state) => {
-        const response = await llm.invoke(state);
-        return { messages: response }
-    }
-    const workflow = new StateGraph(MessagesAnnotation)
-        .addNode("model", callModel)
-        .addEdge(START, "model")
-        .addEdge("model", END);
+    // Define the scheduleEvent tool using DynamicStructuredTool
+    const scheduleEventTool = new DynamicStructuredTool({
+        name: "scheduleEvent",
+        description: "Schedule an event in the calendar.",
+        schema: z.object({
+            title: z.string().describe("Event title"),
+            startTime: z.string().describe("Event start date and time"),
+            endTime: z.string().optional().describe("Event end date and time"),
+            description: z.string().optional().describe("Optional event description"),
+        }),
+        func: async ({ title, startTime, endTime, description }) => {
+            if (!title || !startTime || !endTime) {
+                return "Title, start time, and end time are required.";
+            }
+            inngest.send({
+                name: 'create-event',
+                data: {
+                    userId,
+                    title,
+                    startTime: new Date(startTime),
+                    endTime: new Date(endTime),
+                    description
+                }
+            });
+            console.log(title, startTime, endTime, description, 'first')
+            return `Event "${title}" scheduled from ${startTime}${endTime ? ` to ${endTime}` : ""}.`;
+        },
+    });
 
-    const app = workflow.compile({ checkpointer: memory })
-    const output = await app.invoke({ messages: prompt }, { configurable: { thread_id: chatId } });
-    console.log(output, 'output from llm')
-    return output.messages[output.messages.length - 1]?.content
+    const tools = [addTaskTool, scheduleEventTool];
+    const prompt = ChatPromptTemplate.fromMessages([
+        ["system", `You are a helpful assistant for managing tasks and events. Today's date is ${new Date().toLocaleDateString()}.
+
+When adding a task, you need:
+- Title (required from user)
+- Description (create a more detailed explanation that expands on the title with additional context, purpose, or specific details)
+- Priority (set appropriately based on these guidelines):
+  * High: Only for truly urgent/critical tasks (deadlines within 24-48 hours, emergency situations, critical work deliverables)
+  * Medium: For important but not urgent tasks (regular work items, commitments with flexible deadlines)
+  * Low: For routine, casual, or non-urgent tasks (errands, shopping, leisure activities, future plans)
+- DueDate (optional)
+
+Examples of good descriptions:
+- Title: "Buy medicine for mom" → Description: "Purchase vericose vein medication from the hospital pharmacy. Remember to bring the prescription and medical card."
+- Title: "Submit report" → Description: "Complete and submit the quarterly financial analysis to the management team with all supporting documentation."
+
+When scheduling an event, you need:
+- Title (required from user)
+- Description (create a detailed explanation including location, participants, purpose, and any preparation needed)
+- StartTime (required - if user only provides a date without time, use 9:00 AM of that date)
+- EndTime (required - if user doesn't specify, use 1 hour after start time)
+
+Examples of good event descriptions:
+- Title: "Team meeting" → Description: "Weekly project status meeting with the development team in Conference Room A. Prepare progress updates on assigned tasks and bring any blockers for discussion."
+- Title: "Doctor appointment" → Description: "Annual checkup with Dr. Johnson at City Medical Center. Bring insurance card, list of current medications, and any recent test results. Arrive 15 minutes early to complete paperwork."
+
+If the user doesn't provide required information, ask follow-up questions to get the missing details before executing any tool.`],
+        ["placeholder", "{chat_history}"],
+        ["human", "{input}"],
+        ["placeholder", "{agent_scratchpad}"],
+    ]);
+
+    const agent = createToolCallingAgent({ llm, tools, prompt });
+    const executor = new AgentExecutor({ agent, tools });
+
+    const result = await executor.invoke({
+        input
+    });
+    return result?.output;
 }

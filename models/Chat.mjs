@@ -8,18 +8,34 @@ const chatSchema = new mongoose.Schema({
     chat: [{
         role: {
             type: String,
-            enum: ['user', 'hiverr'],
+            enum: ['user', 'bot'],
             required: true
         },
-        message: {
+        text: {
             type: String,
             required: true
+        },
+        id: {
+            type: String,
+            required: true,
+        },
+        timeStamp: {
+            type: Date,
+            default: Date.now
+        },
+        mode: {
+            type: String,
+            default: 'ask',
+            enum: ['llm', 'ask', 'agent']
         }
     }],
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         required: true,
-    }
+    },
+    lastGreeting: {
+        type: String,
+    },
 }, { timestamps: true })
 
 const Chat = mongoose.model('Chat', chatSchema);

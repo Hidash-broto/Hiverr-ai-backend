@@ -23,6 +23,10 @@ export const getTasks = async (req, res) => {
 }
 export const createTask = async (req, res) => {
     try {
+        const { error } = Tasks.validateTask(req.body);
+        if (error) {
+            return res.status(400).json({ status: false, message: 'Invalid task data', error });
+        }
         const task = new Tasks({ ...req.body, user: req.userId });
         await task.save();
         res.status(201).json(task);
