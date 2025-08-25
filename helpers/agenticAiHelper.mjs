@@ -34,7 +34,7 @@ export const agenticAiTaskCreation = async ({ title, dueDate, description, prior
 }
 
 export const agenticAiEventCreation = async ({ title, startTime, endTime, description, user }) => {
-try {
+    try {
         const { error } = await validateEvent({ title, startTime, endTime, description, user });
         if (error) {
             console.log(error);
@@ -50,7 +50,7 @@ try {
 
         // Check for time conflicts with existing events
         const isOtherEventOnThatTime = await Event.findOne({
-            user: req.userId,
+            user,
             $or: [
                 // New event starts during existing event
                 { startTime: { $lte: startTime }, endTime: { $gt: startTime } },
@@ -60,6 +60,8 @@ try {
                 { startTime: { $gte: startTime }, endTime: { $lte: endTime } }
             ]
         });
+
+        console.log(isOtherEventOnThatTime)
 
         if (isOtherEventOnThatTime) {
             return {

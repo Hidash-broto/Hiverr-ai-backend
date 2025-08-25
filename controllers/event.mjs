@@ -59,7 +59,7 @@ export const createEvent = async (req, res) => {
 
 export const getEvents = async (req, res) => {
     try {
-        const { query = '', filter = null } = req.query;
+        const { query = '', filter = null, month = null } = req.query;
         const filterObject = {
             all: null,
             upcoming: { startTime: { $gte: new Date() } },
@@ -75,9 +75,11 @@ export const getEvents = async (req, res) => {
                     { description: { $regex: query, $options: 'i' } }
                 ]
             }),
-            ...(filter && filterObject[filter])
+            ...(filter && filterObject[filter]),
+            ...(month && { $expr: { $eq: [{ $month: "$startTime" }, month] } })
         };
-        const events = await Event.find(filters).populate('user', 'name email').populate('attendees', 'name email');
+        const events = await Event.find(filters)
+            .populate('user', 'name email').populate('attendees', 'name email').sort({ createdAt: -1 });
         res.status(200).json(events);
     } catch (error) {
         res.status(500).json({ message: 'Error fetching events', error });

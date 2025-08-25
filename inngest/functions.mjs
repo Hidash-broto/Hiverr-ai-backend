@@ -13,7 +13,7 @@ export const updateInitialMessage = inngest.createFunction(
             { userId },
             {
                 lastGreeting: message,
-                $push: { chat: { role: 'bot', text: message, id: `b-${Date.now()}`, timeStamp: new Date.now() } }
+                $push: { chat: { role: 'bot', text: message, id: `b-${Date.now()}`, timeStamp: new Date() } }
             },
         )
     }
@@ -29,9 +29,9 @@ export const taskAiAgentTool = inngest.createFunction(
         // Pass data to helper function with user field properly mapped
         await agenticAiTaskCreation({
             title, 
-            dueDate, 
+            dueDate,    
             description, 
-            priority: priority.toLowerCase(), 
+            priority: typeof priority === 'string' ? priority.toLowerCase() : 'medium', 
             user: userId
         });
     }

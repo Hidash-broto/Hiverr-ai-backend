@@ -11,6 +11,8 @@ import { initialChatPrompt } from "./constants.mjs";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { createToolCallingAgent, AgentExecutor } from "langchain/agents";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { ChatMessageHistory } from "langchain/stores/message/in_memory";
+import { RunnableWithMessageHistory } from "@langchain/core/runnables";
 import z from "zod";
 import { inngest } from "../inngest/client.mjs";
 
@@ -45,33 +47,42 @@ const workflow = new StateGraph(MessagesAnnotation)
 const memory = new MemorySaver();
 export const app = workflow.compile({ checkpointer: memory })
 
+// Message history storage for agent conversations
+const messageHistories = new Map();
+
 export const initializeChat = async (data, chatId) => {
     const message = [{ role: 'user', content: initialChatPrompt(data) }];
     const output = await llm.invoke(message, { configurable: { thread_id: chatId } });
     return output.content;
 }
 
-export const llmChat = async (input) => {
+export const llmChat = async (messages) => {
     const llm = new ChatGoogleGenerativeAI({
         model: "gemini-2.0-flash",
         temperature: 0
     });
-    return await llm.invoke([{ role: 'user', content: input }]);
+    return await llm.invoke(messages);
 }
 
-export const agent = async (input, userId) => {
+export const agent = async (input, userId, chatId = null) => {
+    // Get or create message history for this chat session
+    const sessionId = chatId || userId;
+    if (!messageHistories.has(sessionId)) {
+        messageHistories.set(sessionId, new ChatMessageHistory());
+    }
 
     const addTaskTool = new DynamicStructuredTool({
         name: "addTask",
         description: "Add a new task to the list.",
         schema: z.object({
             title: z.string().describe("Task title"),
-            dueDate: z.string().optional().describe("Optional due date"),
-            description: z.string().optional().describe("Optional task description"),
-            priority: z.string().optional().describe("Task priority (high, medium, low)"),
+            description: z.string().describe("Task description"),
+            dueDate: z.string().optional().describe("Optional due date (ISO string format)"),
+            priority: z.enum(["high", "medium", "low"]).default("medium").describe("Task priority"),
         }),
         func: async ({ title, dueDate, description, priority }) => {
             try {
+                console.log('Adding task:', { title, dueDate, description, priority });
                 if (!title || !description) {
                     return "Title and description are required.";
                 }
@@ -97,29 +108,32 @@ export const agent = async (input, userId) => {
     // Define the scheduleEvent tool using DynamicStructuredTool
     const scheduleEventTool = new DynamicStructuredTool({
         name: "scheduleEvent",
-        description: "Schedule an event in the calendar.",
+        description: "Add a new event to the list.",
         schema: z.object({
             title: z.string().describe("Event title"),
             startTime: z.string().describe("Event start date and time"),
-            endTime: z.string().optional().describe("Event end date and time"),
-            description: z.string().optional().describe("Optional event description"),
+            endTime: z.string().describe("Event end date and time"),
+            description: z.string().describe("Event description"),
         }),
         func: async ({ title, startTime, endTime, description }) => {
             if (!title || !startTime || !endTime) {
                 return "Title, start time, and end time are required.";
             }
-            inngest.send({
-                name: 'create-event',
-                data: {
-                    userId,
-                    title,
-                    startTime: new Date(startTime),
-                    endTime: new Date(endTime),
-                    description
-                }
-            });
-            console.log(title, startTime, endTime, description, 'first')
-            return `Event "${title}" scheduled from ${startTime}${endTime ? ` to ${endTime}` : ""}.`;
+            try {
+                await inngest.send({
+                    name: 'create-event',
+                    data: {
+                        userId,
+                        title,
+                        startTime: new Date(startTime),
+                        endTime: new Date(endTime),
+                        description
+                    }
+                });
+                return `Event "${title}" scheduled from ${startTime} to ${endTime}.`;
+            } catch (err) {
+                return `Failed to schedule event "${title}". Error: ${err.message}`;
+            }
         },
     });
 
@@ -150,17 +164,39 @@ Examples of good event descriptions:
 - Title: "Team meeting" → Description: "Weekly project status meeting with the development team in Conference Room A. Prepare progress updates on assigned tasks and bring any blockers for discussion."
 - Title: "Doctor appointment" → Description: "Annual checkup with Dr. Johnson at City Medical Center. Bring insurance card, list of current medications, and any recent test results. Arrive 15 minutes early to complete paperwork."
 
-If the user doesn't provide required information, ask follow-up questions to get the missing details before executing any tool.`],
+If the user doesn't provide required information, ask follow-up questions to get the missing details before executing any tool.
+
+Remember previous conversations and refer to them when relevant. Be conversational and remember what the user has told you before.`],
         ["placeholder", "{chat_history}"],
         ["human", "{input}"],
         ["placeholder", "{agent_scratchpad}"],
     ]);
 
-    const agent = createToolCallingAgent({ llm, tools, prompt });
-    const executor = new AgentExecutor({ agent, tools });
-
-    const result = await executor.invoke({
-        input
+    // Use ChatGoogleGenerativeAI for tool calling as it supports complex message structures
+    const toolCallingLlm = new ChatGoogleGenerativeAI({
+        model: "gemini-2.0-flash",
+        temperature: 0
     });
+
+    const agent = createToolCallingAgent({ llm: toolCallingLlm, tools, prompt });
+    const executor = new AgentExecutor({ 
+        agent, 
+        tools,
+        verbose: false 
+    });
+
+    // Create agent with message history
+    const agentWithHistory = new RunnableWithMessageHistory({
+        runnable: executor,
+        getMessageHistory: (sessionId) => messageHistories.get(sessionId),
+        inputMessagesKey: "input",
+        historyMessagesKey: "chat_history",
+    });
+
+    const result = await agentWithHistory.invoke(
+        { input },
+        { configurable: { sessionId } }
+    );
+    
     return result?.output;
 }

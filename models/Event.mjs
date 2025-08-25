@@ -18,15 +18,15 @@ const Event = new mongoose.Schema({
     location: {
         address: {
             type: String,
-            required: true
+            required: false
         },
         longitude: {
             type: Number,
-            required: true
+            required: false
         },
         latitude: {
             type: Number,
-            required: true
+            required: false
         }
     },
     attendees: [{
@@ -51,7 +51,7 @@ const Event = new mongoose.Schema({
 export const validateEvent = (event) => {
     const schema = joi.object({
         title: joi.string().min(3).max(100).required(),
-        description: joi.string().min(10).max(500).required(),
+        description: joi.string().max(500).required(),
         user: joi.string().required(),
         location: joi.object({
             address: joi.string().required(),
